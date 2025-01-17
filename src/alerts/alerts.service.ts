@@ -11,7 +11,6 @@ import { AlertsRepository } from './repositories/alerts.repository';
 import { Alert } from './entities/alert.entity';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
-import { ExrateResponse } from 'src/price-tracker/interfaces/exrate-response.interface';
 import { lastValueFrom } from 'rxjs';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { CoinsRepository } from './repositories/coins.repository';
@@ -37,7 +36,7 @@ export class AlertsService {
   async createNewAlert(
     userId: string,
     addAlertDto: AddAlertDto,
-  ): Promise<void> {
+  ): Promise<AlertData> {
     const { token, target_price, direction, active, is_triggered } =
       addAlertDto;
     const newAlert = this.alertsRepository.create({
@@ -51,6 +50,8 @@ export class AlertsService {
 
     try {
       await this.alertsRepository.save(newAlert);
+      const result = await this.modifyAlertData([newAlert]);
+      return result[0];
     } catch (error) {
       this.logger.error(
         `Failed to create alert for ${token} at price ${target_price}: ${error}`,
@@ -64,31 +65,8 @@ export class AlertsService {
       const response: Alert[] = await this.alertsRepository.find({
         where: { user_id: userId },
       });
-
-      //handle async operation within map
-      const alerts: AlertData[] = await Promise.all(
-        response.map(async (item: Alert) => {
-          const metadata: AlertTokenData = await this.addDataForToken(
-            item.token,
-          );
-          return {
-            id: item.id,
-            symbol: metadata.symbol,
-            name: metadata.name,
-            icon: metadata.icon,
-            price: metadata.price,
-            change: metadata.change,
-            target_price: item.target_price,
-            direction: item.direction,
-            user_id: item.user_id,
-            active: item.active,
-            is_triggered: item.is_triggered,
-            created_at: item.created_at,
-          } as AlertData;
-        }),
-      );
-
-      return alerts;
+      const result = await this.modifyAlertData(response);
+      return result;
     } catch (error) {
       this.logger.error(
         `Failed to get alerts of user ${userId} from database: ${error.message}`,
@@ -148,24 +126,21 @@ export class AlertsService {
   }
 
   async fetchAssetPrice(token: string): Promise<number> {
-    const url: string = this.env.get<string>('COINAPI_URL');
-    const key: string = this.env.get<string>('COINAPI_KEY');
-
+    const url: string = `${this.env.get<string>('COINMARKETCAP_BASE_URL')}/cryptocurrency/quotes/latest`;
     const headers = {
-      'X-CoinAPI-Key': key,
+      'X-CMC_PRO_API_KEY': this.env.get<string>('COINMARKETCAP_API_KEY'),
+    };
+    const params = {
+      symbol: token.toUpperCase(),
+      convert: 'USD',
     };
     try {
       const response = await lastValueFrom(
-        this.http.get<ExrateResponse>(`${url}/exchangerate/${token}/USDT`, {
-          headers,
-        }),
+        this.http.get(url, { headers, params }),
       );
-      return response.data.rate;
+      return response.data.data[token].quote.USD.price;
     } catch (error) {
-      this.logger.error(`Failed to fetch exchange rate for ${token}: ${error}`);
-      throw new InternalServerErrorException(
-        'Error fetching current exchange rate',
-      );
+      throw new Error(`Failed to fetch exchange rate: ${error.message}`);
     }
   }
 
@@ -217,6 +192,31 @@ export class AlertsService {
     } catch (error) {
       this.logger.error('Failed to get token ids by ticker', error);
     }
+  }
+
+  private async modifyAlertData(alerts: Alert[]): Promise<AlertData[]> {
+    //handle async operation within map
+    const alertsData: AlertData[] = await Promise.all(
+      alerts.map(async (item: Alert) => {
+        const metadata: AlertTokenData = await this.addDataForToken(item.token);
+        return {
+          id: item.id,
+          symbol: metadata.symbol,
+          name: metadata.name,
+          icon: metadata.icon,
+          price: metadata.price,
+          change: metadata.change,
+          target_price: item.target_price,
+          direction: item.direction,
+          user_id: item.user_id,
+          active: item.active,
+          is_triggered: item.is_triggered,
+          created_at: item.created_at,
+        } as AlertData;
+      }),
+    );
+
+    return alertsData;
   }
 
   async getMetadataForCoins(ids: string[]): Promise<CoinMetrics> {

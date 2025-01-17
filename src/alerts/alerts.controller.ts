@@ -21,7 +21,7 @@ export class AlertsController {
   constructor(private alertsService: AlertsService) {}
 
   @Post('new')
-  createAlert(@GetUser() user: User, @Body() payload: any): Promise<void> {
+  createAlert(@GetUser() user: User, @Body() payload: any): Promise<AlertData> {
     const data = payload.data;
     const dto = Object.assign(new AddAlertDto(), data);
     return this.alertsService.createNewAlert(user.id, dto);
